@@ -23,13 +23,14 @@ JACKAL_CFG = ArticulationCfg(
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.5), 
-        joint_vel={".*": 0.0},  # [추가] 물리 엔진에게 GPU 속도 텐서 방을 미리 파두라고 명령!
+        joint_pos={".*": 0.0},
+        joint_vel={".*": 0.0},
     ),
     actuators={
         "wheels": ImplicitActuatorCfg(
-            joint_names_expr=[".*wheel.*"],
+            joint_names=["front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel"],
             stiffness=0.0,
-            damping=100.0,
+            damping=10.0,
         ),
     },
 )
@@ -44,9 +45,9 @@ class RobotActionsCfg:
 class RobotObservationsCfg:
     @configclass
     class PolicyCfg(ObservationGroupCfg):
-        joint_vel_a = ObservationTermCfg(func=mdp.joint_vel, params={"asset_cfg": SceneEntityCfg("robot_a")})
-        joint_vel_b = ObservationTermCfg(func=mdp.joint_vel, params={"asset_cfg": SceneEntityCfg("robot_b")})
-        joint_vel_c = ObservationTermCfg(func=mdp.joint_vel, params={"asset_cfg": SceneEntityCfg("robot_c")})
+        joint_vel_a = ObservationTermCfg(func=mdp.joint_vel, params={"asset_cfg": SceneEntityCfg("robot_a", joint_names=[".*wheel.*"])})
+        joint_vel_b = ObservationTermCfg(func=mdp.joint_vel, params={"asset_cfg": SceneEntityCfg("robot_b", joint_names=[".*wheel.*"])})
+        joint_vel_c = ObservationTermCfg(func=mdp.joint_vel, params={"asset_cfg": SceneEntityCfg("robot_c", joint_names=[".*wheel.*"])})
         
     policy: PolicyCfg = PolicyCfg()
 
@@ -59,12 +60,12 @@ class DefectMappingEnvCfg(ManagerBasedEnvCfg):
 
     sim: sim_utils.SimulationCfg = sim_utils.SimulationCfg(
         device="cuda:0", 
-        dt=0.005,
+        dt=0.01,
         render_interval=4,
     )
     
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
-        num_envs=1, 
+        num_envs=64, 
         env_spacing=5.0, 
         replicate_physics=True
     )
@@ -124,6 +125,7 @@ class DefectMappingEnvCfg(ManagerBasedEnvCfg):
             prim_path="{ENV_REGEX_NS}/Robot_A/base_link",
             update_period=0.02,
             offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.5)),
+            ray_alignment="yaw",
             attach_yaw_only=True,
             pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[2.0, 2.0]),
             mesh_prim_paths=["/World/ground/terrain"], 

@@ -1,5 +1,7 @@
 # train_qmix.py
 import os
+os.environ["OMNI_GRAPH_EXECUTION_MODE"] = "pipeline"
+import csv
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -12,6 +14,16 @@ from isaaclab.app import AppLauncher
 # Mac 환경 스트리밍을 위해 8211 포트 웹서버 모드(livestream=2)로 가동
 app_launcher = AppLauncher(headless=False)
 simulation_app = app_launcher.app
+
+# ───────────────────────────────────────────────────────────────
+# [최종 해결] Isaac Sim 4.5.0 전용 C++ 플러그인 영구 음소거
+import omni.log
+
+try:
+    omni.log.get_log().set_channel_level("omni.physx.tensors.plugin", omni.log.Level.FATAL)
+except Exception:
+    pass
+# ───────────────────────────────────────────────────────────────
 
 from isaaclab.envs import ManagerBasedEnv
 from env_cfg import DefectMappingEnvCfg
@@ -48,8 +60,17 @@ def main():
     print("[INFO] 허스키(Husky) 로봇 부대 투입! 고속 매핑 테스트 가동")
     print("[INFO] ========================================================\n")
 
+    # ───────────────────────────────────────────────────────────────
+    # [추가] 메인 루프 시작 전, 데이터 기록용 CSV 파일 헤더 생성
+    log_filename = "defect_mapping_results.csv"
+    if not os.path.exists(log_filename):
+        with open(log_filename, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(["Episode", "Reward", "Coverage(%)", "Epsilon"])
+    # ───────────────────────────────────────────────────────────────
+
     epsilon = 1.0          
-    epsilon_min = 0.05
+    epsilon_min = 0.01
     epsilon_decay = 0.995 
     gamma = 0.99           
     
@@ -64,7 +85,7 @@ def main():
         global_grid_map = np.zeros((grid_size, grid_size), dtype=bool)
         
         current_actions = [0, 0, 0] 
-        action_update_steps = 15     
+        action_update_steps = 10    
         
         for step in range(1000):
             if not simulation_app.is_running(): break
@@ -105,7 +126,7 @@ def main():
                 
                 # [직관적 제어] 4개 바퀴의 목표 회전 속도(Target Velocity) 텐서
                 robot_joint_target = torch.zeros(4, device=device)
-                wheel_speed = 10.0 # rad/s
+                wheel_speed = 100.0 # rad/s
                 
                 # 차동 구동 매핑: [앞왼쪽, 앞오른쪽, 뒤왼쪽, 뒤오른쪽]
                 if action_idx == 0:   # 정지
@@ -127,9 +148,10 @@ def main():
                     
                 actions_list.append(robot_joint_target.unsqueeze(0))
             
-            joint_actions = torch.cat(actions_list, dim=1)
+            joint_actions = torch.zeros((env.num_envs, 12), device=device)
             
             try:
+                print(f"[DEBUG] 최종 액션 텐서 값 확인: {joint_actions}")
                 obs, info = env.step(joint_actions)
             except Exception as e:
                 obs, info = env.reset()
@@ -153,9 +175,9 @@ def main():
                     
                     if 0 <= grid_x < grid_size and 0 <= grid_y < grid_size:
                         if not global_grid_map[grid_x, grid_y]:
+            
                             global_grid_map[grid_x, grid_y] = True
                             new_cells_mapped += 1
-            
             reward_val = new_cells_mapped * 0.05
             reward = torch.tensor([[reward_val]], device=device)
             episode_reward += reward_val
@@ -177,8 +199,20 @@ def main():
         
         print(f"[QMIX 논문 훈련] 에피소드: {episode} | 탐색 면적: {episode_reward:.2f} | 맵 커버리지: {coverage_percent:.2f}% | 엡실론: {epsilon:.3f}")
         print("-" * 110)
+
+        # ───────────────────────────────────────────────────────────────
+        # [추가] 핵심 데이터만 조용히 CSV 파일에 누적 저장!
+        with open(log_filename, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow([episode, episode_reward, coverage_percent, epsilon])
+        # ───────────────────────────────────────────────────────────────
         
         obs, info = env.reset()
+
+        if episode % 100 == 0:
+            torch.save(agent_net.state_dict(), f"models/agent_ep_{episode}.pth")
+            torch.save(mixer_net.state_dict(), f"models/mixer_ep_{episode}.pth")
+            print(f"[INFO] 체크포인트 저장 완료: 에피소드 {episode}")
 
     env.close()
 
