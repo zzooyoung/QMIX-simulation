@@ -6,56 +6,99 @@ import isaaclab.sim as sim_utils
 
 from isaaclab.sensors import RayCasterCfg, patterns
 from isaaclab.terrains import TerrainImporterCfg, TerrainGeneratorCfg
-# [임포트 오류 해결] SubTerrainCfg 대신 정석 높이맵 파도 지형 클래스인 HfWaveTerrainCfg 로드
-from isaaclab.terrains.height_field import HfWaveTerrainCfg 
-from isaaclab_assets.robots.anymal import ANYMAL_C_CFG 
+# [지형 교체] 비정형 결함 구조물을 모사하기 위한 표면 노이즈 및 잔해물 지형 로드
+from isaaclab.terrains.height_field import HfRandomUniformTerrainCfg, HfDiscreteObstaclesTerrainCfg
+
+from isaaclab.assets import ArticulationCfg
+from isaaclab.actuators import ImplicitActuatorCfg
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 import isaaclab.envs.mdp as mdp
 from isaaclab.managers import ObservationGroupCfg, ObservationTermCfg, SceneEntityCfg
 
+# 바퀴형 로봇(Jackal) 명세 유지
+JACKAL_CFG = ArticulationCfg(
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/Clearpath/Jackal/jackal.usd",
+    ),
+    init_state=ArticulationCfg.InitialStateCfg(
+        pos=(0.0, 0.0, 0.5), 
+        joint_vel={".*": 0.0},  # [추가] 물리 엔진에게 GPU 속도 텐서 방을 미리 파두라고 명령!
+    ),
+    actuators={
+        "wheels": ImplicitActuatorCfg(
+            joint_names_expr=[".*wheel.*"],
+            stiffness=0.0,
+            damping=100.0,
+        ),
+    },
+)
+
 @configclass
 class RobotActionsCfg:
-    joint_commands_a = mdp.JointPositionActionCfg(asset_name="robot_a", joint_names=[".*"], scale=1.0)
-    joint_commands_b = mdp.JointPositionActionCfg(asset_name="robot_b", joint_names=[".*"], scale=1.0)
-    joint_commands_c = mdp.JointPositionActionCfg(asset_name="robot_c", joint_names=[".*"], scale=1.0)
+    joint_commands_a = mdp.JointVelocityActionCfg(asset_name="robot_a", joint_names=[".*wheel.*"], scale=1.0)
+    joint_commands_b = mdp.JointVelocityActionCfg(asset_name="robot_b", joint_names=[".*wheel.*"], scale=1.0)
+    joint_commands_c = mdp.JointVelocityActionCfg(asset_name="robot_c", joint_names=[".*wheel.*"], scale=1.0)
 
 @configclass
 class RobotObservationsCfg:
     @configclass
     class PolicyCfg(ObservationGroupCfg):
-        joint_pos_a = ObservationTermCfg(func=mdp.joint_pos, params={"asset_cfg": SceneEntityCfg("robot_a")})
-        joint_pos_b = ObservationTermCfg(func=mdp.joint_pos, params={"asset_cfg": SceneEntityCfg("robot_b")})
-        joint_pos_c = ObservationTermCfg(func=mdp.joint_pos, params={"asset_cfg": SceneEntityCfg("robot_c")})
+        joint_vel_a = ObservationTermCfg(func=mdp.joint_vel, params={"asset_cfg": SceneEntityCfg("robot_a")})
+        joint_vel_b = ObservationTermCfg(func=mdp.joint_vel, params={"asset_cfg": SceneEntityCfg("robot_b")})
+        joint_vel_c = ObservationTermCfg(func=mdp.joint_vel, params={"asset_cfg": SceneEntityCfg("robot_c")})
         
     policy: PolicyCfg = PolicyCfg()
 
 @configclass
 class DefectMappingEnvCfg(ManagerBasedEnvCfg):
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1, env_spacing=5.0)
+    # ───────────────────────────────────────────────────────────────
+    # [에러 완벽 해결] 시뮬레이션 파이프라인 전체를 GPU(cuda:0)로 강제 동기화
+    # ───────────────────────────────────────────────────────────────
+    decimation: int = 4
+
+    sim: sim_utils.SimulationCfg = sim_utils.SimulationCfg(
+        device="cuda:0", 
+        dt=0.005,
+        render_interval=4,
+    )
+    
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(
+        num_envs=1, 
+        env_spacing=5.0, 
+        replicate_physics=True
+    )
     actions: RobotActionsCfg = RobotActionsCfg()
     observations: RobotObservationsCfg = RobotObservationsCfg()
 
     def __post_init__(self):
-        self.sim.dt = 0.005  
-        self.decimation = 4  
-        
-        # 돔 라이트 배치 (전체를 대낮처럼 환하게)
+        # [추가] 순정 GPU 설정은 유지한 채, 물리 엔진 연산 간격(dt)만 안전하게 덮어씌웁니다.
+
+        # 대낮 조명
         light_cfg = sim_utils.DomeLightCfg(intensity=3000.0, color=(1.0, 1.0, 1.0))
         sim_utils.spawn_light("/World/light", light_cfg)
         
         # ───────────────────────────────────────────────────────────────
-        # [정상화 완료] 로봇이 뒤집어지지 않고 부드럽게 넘나들 수 있는 구릉지 제너레이터
+        # [목표 지형 적용] 비정형 결함 구조물 모사 (부식 노면 & 산업 잔해물 융합)
         # ───────────────────────────────────────────────────────────────
-        custom_gentle_terrain = TerrainGeneratorCfg(
+        custom_defect_terrain = TerrainGeneratorCfg(
             size=(20.0, 20.0),
             border_width=0.0,
             num_rows=5,
             num_cols=5,
             sub_terrains={
-                "gentle_wave": HfWaveTerrainCfg(
-                    proportion=1.0,
-                    amplitude_range=(0.05, 0.15), # [API 매핑] 5cm에서 최대 15cm까지의 안전한 굴곡 높이
-                    num_waves=2
+                # 1. 거대한 잔해물 (LiDAR 시야를 차단하여 협동 탐색을 강제하는 벽 역할)
+                "massive_debris": HfDiscreteObstaclesTerrainCfg(
+                    proportion=0.5,
+                    obstacle_width_range=(0.5, 2.0),
+                    obstacle_height_range=(0.5, 1.5), # 최대 1.5m 높이의 거대한 콘크리트 기둥/벽 생성
+                    num_obstacles=30                  # 구역당 30개의 장애물 빽빽하게 배치
+                ),
+                # 2. 험악하게 파인 부식 노면 (로봇의 주행을 방해하는 크레이터)
+                "ruined_surface": HfRandomUniformTerrainCfg(
+                    proportion=0.5,
+                    noise_range=(0.0, 0.3),           # 최대 30cm 깊이의 싱크홀/파임 생성
+                    noise_step=0.05
                 )
             }
         )
@@ -63,23 +106,22 @@ class DefectMappingEnvCfg(ManagerBasedEnvCfg):
         self.scene.terrain = TerrainImporterCfg(
             prim_path="/World/ground",
             terrain_type="generator",
-            terrain_generator=custom_gentle_terrain,
+            terrain_generator=custom_defect_terrain,
         )
         
-        # env_cfg.py 수정 파트 (로봇 스폰 위치 Z축을 1.2로 상향 조정)
-        # 로봇 3대 배치 (스폰 높이를 안전하게 1.2m로 지정하여 땅속 스폰 방지)
-        self.scene.robot_a = ANYMAL_C_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot_A")
-        self.scene.robot_a.init_state.pos = (0.0, -1.5, 1.2) # 0.6 -> 1.2로 변경
+        # 로봇 3대 배치 
+        self.scene.robot_a = JACKAL_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot_A")
+        self.scene.robot_a.init_state.pos = (0.0, -1.5, 0.5)
         
-        self.scene.robot_b = ANYMAL_C_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot_B")
-        self.scene.robot_b.init_state.pos = (0.0, 0.0, 1.2)  # 0.6 -> 1.2로 변경
+        self.scene.robot_b = JACKAL_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot_B")
+        self.scene.robot_b.init_state.pos = (0.0, 0.0, 0.5)
         
-        self.scene.robot_c = ANYMAL_C_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot_C")
-        self.scene.robot_c.init_state.pos = (0.0, 1.5, 1.2)  # 0.6 -> 1.2로 변경
+        self.scene.robot_c = JACKAL_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot_C")
+        self.scene.robot_c.init_state.pos = (0.0, 1.5, 0.5)
         
-        # 가상 LiDAR 레이캐스터 장착 (제너레이터 모드이므로 /terrain 경로 타겟팅)
+        # 가상 LiDAR 장착
         self.scene.height_scanner_a = RayCasterCfg(
-            prim_path="{ENV_REGEX_NS}/Robot_A/base",
+            prim_path="{ENV_REGEX_NS}/Robot_A/base_link",
             update_period=0.02,
             offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.5)),
             attach_yaw_only=True,
@@ -88,7 +130,7 @@ class DefectMappingEnvCfg(ManagerBasedEnvCfg):
         )
         
         self.scene.height_scanner_b = RayCasterCfg(
-            prim_path="{ENV_REGEX_NS}/Robot_B/base",
+            prim_path="{ENV_REGEX_NS}/Robot_B/base_link",
             update_period=0.02,
             offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.5)),
             attach_yaw_only=True,
@@ -97,18 +139,10 @@ class DefectMappingEnvCfg(ManagerBasedEnvCfg):
         )
         
         self.scene.height_scanner_c = RayCasterCfg(
-            prim_path="{ENV_REGEX_NS}/Robot_C/base",
+            prim_path="{ENV_REGEX_NS}/Robot_C/base_link",
             update_period=0.02,
             offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.5)),
             attach_yaw_only=True,
             pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[2.0, 2.0]),
             mesh_prim_paths=["/World/ground/terrain"], 
         )
-
-        # PhysX GPU 버퍼 최적화 세팅
-        self.sim.physx.use_gpu = True
-        self.sim.physx.gpu_max_rigid_contact_count = 2**22     
-        self.sim.physx.gpu_max_rigid_patch_count = 2**20       
-        self.sim.physx.gpu_found_lost_pairs_capacity = 2**20   
-        self.sim.physx.gpu_heap_capacity = 2**28               
-        self.sim.physx.gpu_max_vertex_count = 2**22
