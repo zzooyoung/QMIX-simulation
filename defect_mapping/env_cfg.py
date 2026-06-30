@@ -28,9 +28,14 @@ JACKAL_CFG = ArticulationCfg(
     ),
     actuators={
         "wheels": ImplicitActuatorCfg(
-            joint_names=["front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel"],
+            joint_names_expr=[
+                "front_left_wheel_joint", 
+                "front_right_wheel_joint", 
+                "rear_left_wheel_joint", 
+                "rear_right_wheel_joint"
+            ],
             stiffness=0.0,
-            damping=10.0,
+            damping=0.5,
         ),
     },
 )
@@ -66,7 +71,7 @@ class DefectMappingEnvCfg(ManagerBasedEnvCfg):
     
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
         num_envs=64, 
-        env_spacing=5.0, 
+        env_spacing=25.0, 
         replicate_physics=True
     )
     actions: RobotActionsCfg = RobotActionsCfg()
@@ -88,19 +93,19 @@ class DefectMappingEnvCfg(ManagerBasedEnvCfg):
             num_rows=5,
             num_cols=5,
             sub_terrains={
-                # 1. 거대한 잔해물 (LiDAR 시야를 차단하여 협동 탐색을 강제하는 벽 역할)
+                # 1. 완전한 평지 (나머지 50% 공간을 평탄하게 만들어 구덩이 원천 차단)
+                "flat_ground": HfRandomUniformTerrainCfg(
+                    proportion=0.5,
+                    noise_range=(0.0, 0.0), # 노이즈를 0으로 고정하여 아스팔트처럼 평탄하게 만듭니다.
+                    noise_step=0.1,
+                ),
+                # 2. 거대한 잔해물 (위로 솟아오른 벽/장애물만 생성)
                 "massive_debris": HfDiscreteObstaclesTerrainCfg(
                     proportion=0.5,
                     obstacle_width_range=(0.5, 2.0),
-                    obstacle_height_range=(0.5, 1.5), # 최대 1.5m 높이의 거대한 콘크리트 기둥/벽 생성
-                    num_obstacles=30                  # 구역당 30개의 장애물 빽빽하게 배치
+                    obstacle_height_range=(0.5, 1.5), # 아래로 파이지 않고 위로만 최대 1.5m 솟아오릅니다.
+                    num_obstacles=30                  
                 ),
-                # 2. 험악하게 파인 부식 노면 (로봇의 주행을 방해하는 크레이터)
-                "ruined_surface": HfRandomUniformTerrainCfg(
-                    proportion=0.5,
-                    noise_range=(0.0, 0.3),           # 최대 30cm 깊이의 싱크홀/파임 생성
-                    noise_step=0.05
-                )
             }
         )
 
@@ -124,27 +129,44 @@ class DefectMappingEnvCfg(ManagerBasedEnvCfg):
         self.scene.height_scanner_a = RayCasterCfg(
             prim_path="{ENV_REGEX_NS}/Robot_A/base_link",
             update_period=0.02,
-            offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.5)),
+            offset=RayCasterCfg.OffsetCfg(
+                pos=(0.0, 0.0, 0.5), 
+                rot=(0.7071, 0.0, -0.7061, 0.0)  # 땅을 봄 🔍 (마이너스 기호 추가)
+            ),
             ray_alignment="yaw",
             attach_yaw_only=True,
-            pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[2.0, 2.0]),
+            pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[4.0, 4.0]),
             mesh_prim_paths=["/World/ground/terrain"], 
+            debug_vis=False,
+            visualizer_cfg=None
         )
         
         self.scene.height_scanner_b = RayCasterCfg(
             prim_path="{ENV_REGEX_NS}/Robot_B/base_link",
             update_period=0.02,
-            offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.5)),
+            offset=RayCasterCfg.OffsetCfg(
+                pos=(0.0, 0.0, 0.5), 
+                rot=(0.7071, 0.0, -0.7061, 0.0) # 땅을 봄 🔍 (마이너스 기호 추가)
+            ),
+            ray_alignment="yaw",
             attach_yaw_only=True,
-            pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[2.0, 2.0]),
+            pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[4.0, 4.0]),
             mesh_prim_paths=["/World/ground/terrain"], 
+            debug_vis=False,
+            visualizer_cfg=None
         )
         
         self.scene.height_scanner_c = RayCasterCfg(
             prim_path="{ENV_REGEX_NS}/Robot_C/base_link",
             update_period=0.02,
-            offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.5)),
+            offset=RayCasterCfg.OffsetCfg(
+                pos=(0.0, 0.0, 0.5), 
+                rot=(0.7071, 0.0, -0.7061, 0.0)  # 땅을 봄 🔍 (마이너스 기호 추가)
+            ),
+            ray_alignment="yaw",
             attach_yaw_only=True,
-            pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[2.0, 2.0]),
+            pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[4.0, 4.0]),
             mesh_prim_paths=["/World/ground/terrain"], 
+            debug_vis=False,
+            visualizer_cfg=None
         )
