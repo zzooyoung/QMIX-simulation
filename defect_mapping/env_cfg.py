@@ -76,6 +76,7 @@ class DefectMappingEnvCfg(ManagerBasedEnvCfg):
     )
     actions: RobotActionsCfg = RobotActionsCfg()
     observations: RobotObservationsCfg = RobotObservationsCfg()
+    debug_vis = None
 
     def __post_init__(self):
         # [추가] 순정 GPU 설정은 유지한 채, 물리 엔진 연산 간격(dt)만 안전하게 덮어씌웁니다.
@@ -134,11 +135,10 @@ class DefectMappingEnvCfg(ManagerBasedEnvCfg):
                 rot=(0.7071, 0.0, -0.7061, 0.0)  # 땅을 봄 🔍 (마이너스 기호 추가)
             ),
             ray_alignment="yaw",
-            attach_yaw_only=True,
+            attach_yaw_only=False,
             pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[4.0, 4.0]),
             mesh_prim_paths=["/World/ground/terrain"], 
             debug_vis=False,
-            visualizer_cfg=None
         )
         
         self.scene.height_scanner_b = RayCasterCfg(
@@ -149,11 +149,11 @@ class DefectMappingEnvCfg(ManagerBasedEnvCfg):
                 rot=(0.7071, 0.0, -0.7061, 0.0) # 땅을 봄 🔍 (마이너스 기호 추가)
             ),
             ray_alignment="yaw",
-            attach_yaw_only=True,
+            attach_yaw_only=False,
             pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[4.0, 4.0]),
             mesh_prim_paths=["/World/ground/terrain"], 
             debug_vis=False,
-            visualizer_cfg=None
+            visualizer_cfg=None,
         )
         
         self.scene.height_scanner_c = RayCasterCfg(
@@ -164,9 +164,9 @@ class DefectMappingEnvCfg(ManagerBasedEnvCfg):
                 rot=(0.7071, 0.0, -0.7061, 0.0)  # 땅을 봄 🔍 (마이너스 기호 추가)
             ),
             ray_alignment="yaw",
-            attach_yaw_only=True,
+            attach_yaw_only=False,
             pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[4.0, 4.0]),
             mesh_prim_paths=["/World/ground/terrain"], 
             debug_vis=False,
-            visualizer_cfg=None
+            visualizer_cfg=None,
         )

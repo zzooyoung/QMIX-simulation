@@ -11,7 +11,7 @@ from collections import deque
 
 from isaaclab.app import AppLauncher
 # Mac 환경 스트리밍을 위해 웹서버 모드 가동
-app_launcher = AppLauncher(headless=False)
+app_launcher = AppLauncher(headless=True)
 simulation_app = app_launcher.app
 
 # ───────────────────────────────────────────────────────────────
@@ -64,8 +64,18 @@ def main():
     agent_net = DRQNAgent(input_shape=agent_input_shape, n_actions=n_actions).to(device)
     mixer_net = QMixer(n_agents=n_agents, state_shape=state_shape).to(device)
     
+    # 🔥 [QMIX 논문 적용 1] 타겟 네트워크(Target Network) 추가
+    # 논문 스펙: 200 에피소드마다 타겟 네트워크를 업데이트하여 학습 안정성 확보
+    target_agent_net = DRQNAgent(input_shape=agent_input_shape, n_actions=n_actions).to(device)
+    target_mixer_net = QMixer(n_agents=n_agents, state_shape=state_shape).to(device)
+    target_agent_net.load_state_dict(agent_net.state_dict())
+    target_mixer_net.load_state_dict(mixer_net.state_dict())
+    target_update_interval = 200
+    
+    # 🔥 [QMIX 논문 적용 2] Optimizer 변경 (Adam -> RMSprop)
+    # 논문 스펙: lr=5e-4, RMSprop, weight decay 없음, momentum 없음
     hypernet_params = list(agent_net.parameters()) + list(mixer_net.parameters())
-    optimizer = optim.Adam(hypernet_params, lr=1e-4)
+    optimizer = optim.RMSprop(hypernet_params, lr=5e-4, alpha=0.99, eps=1e-5)
 
     print("\n[INFO] ========================================================")
     print("[INFO] 허스키(Husky) 로봇 부대 투입! 고속 매핑 테스트 가동")
@@ -77,10 +87,12 @@ def main():
             writer = csv.writer(file)
             writer.writerow(["Episode", "Reward", "Coverage(%)", "Epsilon"])
 
+    # 🔥 [QMIX 논문 적용 3] Epsilon 선형 감소 (Linear Annealing)
+    # 논문 스펙: 1.0에서 0.05까지 1000 에피소드에 걸쳐 "선형적"으로 감소
     epsilon = 1.0          
-    epsilon_min = 0.01
-    epsilon_decay = 0.995 
-    gamma = 0.99           
+    epsilon_min = 0.05
+    epsilon_decay_step = (1.0 - 0.05) / 1000.0  # 스텝이 아닌 마이너스(-) 감산 방식 적용
+    gamma = 0.99         
     
     obs, info = env.reset()
     episode = 0
@@ -224,7 +236,13 @@ def main():
                                 global_grid_map[grid_x, grid_y] = True
                                 new_cells_mapped += 1
                                 
-            reward_val = new_cells_mapped * 0.05
+            # 🔥 [QMIX 논문 적용 4] 채찍과 당근(보상 및 페널티) 명시
+            # 탐색을 못하고 제자리에 있으면 감점을 주어 억지로 흩어지게 만듭니다.
+            if new_cells_mapped > 0:
+                reward_val = new_cells_mapped * 0.05
+            else:
+                reward_val = -0.01  
+                
             reward = torch.tensor([[reward_val]], device=device)
             episode_reward += reward_val
 
@@ -238,7 +256,11 @@ def main():
             agent_qs_tensor = torch.cat(chosen_q_values, dim=1) 
             q_tot = mixer_net(agent_qs_tensor, global_state)
             
-            target_q_tot = reward + gamma * q_tot.detach()
+            # 🔥 [QMIX 논문 적용 5] Target Network를 활용한 Q-value 타겟 계산
+            # 기존의 q_tot.detach() 대신, 안정적인 target_mixer_net을 사용하여 학습 흔들림 방지
+            with torch.no_grad():
+                target_q_tot = reward + gamma * target_mixer_net(agent_qs_tensor, global_state)
+                
             loss = F.mse_loss(q_tot, target_q_tot)
             
             optimizer.zero_grad()
@@ -246,7 +268,9 @@ def main():
             optimizer.step()
             
         episode += 1
-        epsilon = max(epsilon_min, epsilon * epsilon_decay)
+        # 🔥 [QMIX 논문 적용 3 계속] Epsilon 선형 감소 (곱하기가 아닌 빼기)
+        epsilon = max(epsilon_min, epsilon - epsilon_decay_step)
+        
         coverage_percent = (global_grid_map.sum() / (grid_size * grid_size)) * 100
         
         print(f"[QMIX 논문 훈련] 에피소드: {episode} | 탐색 면적: {episode_reward:.2f} | 맵 커버리지: {coverage_percent:.2f}% | 엡실론: {epsilon:.3f}")
@@ -259,14 +283,20 @@ def main():
         # 주영님의 기존 코드 부분 (에피소드 끝나는 지점)
         obs, info = env.reset()
         
+        # 🔥 [QMIX 논문 적용 1 계속] 200 에피소드마다 타겟 네트워크 주기적 동기화
+        if episode % target_update_interval == 0:
+            target_agent_net.load_state_dict(agent_net.state_dict())
+            target_mixer_net.load_state_dict(mixer_net.state_dict())
+            print(f"🔄 [Target Sync] 에피소드 {episode} - 타겟 네트워크 가중치 동기화 완료!")
+        
         # ───────────────────────────────────────────────────────────────
-        # [추천 추가 코드] 특정 에피소드에 도달하면 최종 결과 요약 후 자동 종료
-        if episode >= 2000: # 2000 에피소드까지만 학습하겠다고 선언
+        # 🔥 [안전 종료 장치] 2000 에피소드 도달 시 자동 종료
+        if episode >= 2000: 
             print("\n" + "="*50)
             print(f"🎉 QMIX 훈련 목표 에피소드({episode}회) 달성 완료! 🎉")
-            print(f"최종 맵 커버리지: {coverage_percent:.2f}% | 모델 저장 완료.")
+            print(f"최종 맵 커버리지: {coverage_percent:.2f}% | 학습을 종료합니다.")
             print("="*50 + "\n")
-            break # while 루프를 탈출하여 env.close()로 안전하게 이동
+            break 
         # ───────────────────────────────────────────────────────────────
 
         if episode % 100 == 0:
